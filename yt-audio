@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+#
+# yt-audio — download high-quality audio from YouTube (and most other sites).
+#
+# Usage:
+#   ./yt-audio [options] <url> [url2 ...]
+#   ./yt-audio [options] -b links.txt
+#
+# Options:
+#   -f, --format FMT   Output format: opus (default), m4a, mp3, flac, wav
+#   -o, --outdir DIR   Output directory (default: ./downloads)
+#   -b, --batch FILE   Read URLs from FILE (one per line, # comments allowed)
+#   -h, --help         Show this help
+#
+# Notes:
+#   * "opus" keeps YouTube's best native stream with NO re-encoding (best quality).
+#   * "m4a"  prefers the native AAC stream to avoid double-compression.
+#   * "mp3"  is a lossy re-encode (universal compatibility).
+#   * "flac"/"wav" are lossless containers — they do NOT add quality beyond the
+#     source, just bigger files. wav is 16-bit/48 kHz PCM.
+#
+set -euo pipefail
+
+FORMAT="opus"
+OUTDIR="./downloads"
+BATCH=""
+URLS=()
+
+die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+info() { printf '\033[36m==>\033[0m %s\n' "$*"; }
+
+show_help() { sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+
+# ---- parse args ------------------------------------------------------------
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -f|--format) FORMAT="${2:-}"; shift 2 ;;
+    -o|--outdir) OUTDIR="${2:-}"; shift 2 ;;
+    -b|--batch)  BATCH="${2:-}";  shift 2 ;;
+    -h|--help)   show_help ;;
+    -*)          die "unknown option: $1 (use --help)" ;;
+    *)           URLS+=("$1"); shift ;;
+  esac
+done
+
+# ---- dependency check ------------------------------------------------------
+command -v yt-dlp >/dev/null 2>&1 || die "yt-dlp not found. Run ./install.sh first."
+command -v ffmpeg >/dev/null 2>&1 || die "ffmpeg not found. Run ./install.sh first."
+
+# ---- validate format -------------------------------------------------------
+case "$FORMAT" in
+  opus|m4a|mp3|flac|wav) ;;
+  *) die "unsupported format: $FORMAT (choose: opus, m4a, mp3, flac, wav)" ;;
+esac
+
+# ---- collect URLs ----------------------------------------------------------
+if [[ -z "$BATCH" && ${#URLS[@]} -eq 0 ]]; then
+  die "no URLs given. Pass links as arguments or use -b links.txt (see --help)."
+fi
+
+mkdir -p "$OUTDIR"
+
+# ---- build yt-dlp format selector + postprocessor --------------------------
+# Pick the best source stream for the requested target.
+case "$FORMAT" in
+  m4a) SELECT='bestaudio[ext=m4a]/bestaudio' ;;
+  *)   SELECT='bestaudio/best' ;;
+esac
+
+YTDLP_ARGS=(
+  -f "$SELECT"
+  -x --audio-format "$FORMAT" --audio-quality 0
+  --embed-metadata --embed-thumbnail
+  --no-playlist
+  -o "$OUTDIR/%(title)s.%(ext)s"
+)
+
+# 16-bit / 48 kHz PCM for wav
+if [[ "$FORMAT" == "wav" ]]; then
+  YTDLP_ARGS+=(--postprocessor-args "ffmpeg:-ar 48000 -sample_fmt s16")
+fi
+
+[[ -n "$BATCH" ]] && YTDLP_ARGS+=(-a "$BATCH")
+
+info "Format: $FORMAT   Output: $OUTDIR"
+yt-dlp "${YTDLP_ARGS[@]}" "${URLS[@]}"
+
+info "Done. Files are in: $OUTDIR"

@@ -1,0 +1,5 @@
+# One URL per line. Lines starting with # are ignored.
+# Copy this to links.txt and paste your own links, then run:  ./yt-audio -b links.txt
+
+https://www.youtube.com/watch?v=k2CjGx_mLOg
+# https://youtu.be/anotherVideoId

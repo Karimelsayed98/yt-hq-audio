@@ -1,0 +1,13 @@
+# Downloaded audio shouldn't be committed
+downloads/
+links.txt
+
+# Common media leftovers
+*.opus
+*.m4a
+*.mp3
+*.flac
+*.wav
+*.webm
+*.part
+*.ytdl
