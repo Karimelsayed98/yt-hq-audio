@@ -34,16 +34,31 @@ install_spotdl() {
   have pipx || { warn "pipx unavailable — skipping spotdl (Spotify links won't work)."; return; }
   pipx ensurepath >/dev/null 2>&1 || true
 
+  # spotdl needs Python <= 3.13. Find a compatible interpreter; if the only one
+  # present is too new (e.g. 3.14), install python@3.13 alongside it on macOS.
   local py; py="$(pick_python || true)"
-  info "Installing spotdl via pipx${py:+ (Python: $py)}..."
-  local installed=0
-  # Select the interpreter via PIPX_DEFAULT_PYTHON — pipx ignores --python when
-  # --force is given, but honours the env var for both fresh and forced installs.
-  if [[ -n "$py" ]]; then
-    PIPX_DEFAULT_PYTHON="$py" pipx install spotdl --force && installed=1
-  else
-    pipx install spotdl --force && installed=1
+  if [[ -z "$py" ]] && have brew; then
+    info "No spotdl-compatible Python (<=3.13) found; installing python@3.13..."
+    brew install python@3.13 && py="$(pick_python || true)"
   fi
+  [[ -n "$py" ]] || warn "Could not find/install Python <=3.13 — spotdl may fail on a newer Python."
+
+  info "Installing spotdl via pipx${py:+ (Python: $py)}..."
+  # PIPX_DEFAULT_PYTHON pins the interpreter (pipx ignores --python under --force).
+  local installed=0
+  for attempt in 1 2; do
+    if [[ -n "$py" ]]; then
+      PIPX_DEFAULT_PYTHON="$py" pipx install spotdl --force && { installed=1; break; }
+    else
+      pipx install spotdl --force && { installed=1; break; }
+    fi
+    # A pipx "shared" env built on a broken Python (e.g. 3.14's ensurepip) makes
+    # the first install fail; clearing it and retrying with $py fixes that.
+    if [[ $attempt -eq 1 ]]; then
+      warn "spotdl install failed — clearing pipx shared env and retrying..."
+      rm -rf "${PIPX_HOME:-$HOME/.local/pipx}/shared" "$HOME/.local/pipx/shared" 2>/dev/null || true
+    fi
+  done
   [[ $installed -eq 1 ]] || { warn "spotdl install failed — Spotify links won't work until it's fixed."; return; }
 
   # Keep spotdl's bundled yt-dlp current — an outdated one fails on YouTube.

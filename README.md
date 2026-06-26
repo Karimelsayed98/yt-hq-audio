@@ -98,9 +98,17 @@ right to download.
   `export PATH="$HOME/.local/bin:$PATH"` (then open a new terminal).
 - **YouTube "challenge" / signature errors** → update yt-dlp (`brew upgrade yt-dlp`).
   On Linux you may also need [deno](https://deno.land).
-- **spotdl install fails on Python 3.14** → spotdl needs Python ≤3.13;
-  `install.sh` auto-selects 3.13/3.12 when available. Install one with
-  `brew install python@3.13` (macOS) and re-run.
+- **spotdl install fails on Python 3.14** → spotdl needs Python ≤3.13.
+  `install.sh` now auto-installs `python@3.13` if needed and recovers from a
+  broken pipx env, so re-running it usually fixes things. To fix a bad spotdl
+  install by hand:
+  ```bash
+  brew install python@3.13
+  pipx uninstall spotdl 2>/dev/null; pip3 uninstall -y spotdl 2>/dev/null
+  rm -rf ~/.local/pipx/shared
+  PIPX_DEFAULT_PYTHON="$(brew --prefix python@3.13)/bin/python3.13" pipx install spotdl --force
+  pipx ensurepath && spotdl --version
+  ```
 - **Spotify download produces no file / HTTP 403** → this tool already works
   around two spotdl quirks (it writes nothing on absolute `--output` paths, and
   its default YouTube client gets 403) by writing into the output dir directly
