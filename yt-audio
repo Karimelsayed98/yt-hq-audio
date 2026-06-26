@@ -105,11 +105,17 @@ if [[ ${#OTHER[@]} -gt 0 ]]; then
   YTDLP_ARGS=(
     -f "$SELECT"
     -x --audio-format "$FORMAT" --audio-quality 0
-    --embed-metadata --embed-thumbnail
+    --embed-metadata
     --no-playlist
     -o "$OUTDIR/%(title)s.%(ext)s"
   )
-  [[ "$FORMAT" == "wav" ]] && YTDLP_ARGS+=(--postprocessor-args "ffmpeg:-ar 48000 -sample_fmt s16")
+  # WAV can't carry an embedded cover image — requesting one errors out and
+  # leaves stray .png/.webp files behind. Embed art for every other format.
+  if [[ "$FORMAT" == "wav" ]]; then
+    YTDLP_ARGS+=(--postprocessor-args "ffmpeg:-ar 48000 -sample_fmt s16")
+  else
+    YTDLP_ARGS+=(--embed-thumbnail)
+  fi
 
   yt-dlp "${YTDLP_ARGS[@]}" "${OTHER[@]}"
 fi

@@ -37,8 +37,10 @@ install_spotdl() {
   local py; py="$(pick_python || true)"
   info "Installing spotdl via pipx${py:+ (Python: $py)}..."
   local installed=0
+  # Select the interpreter via PIPX_DEFAULT_PYTHON — pipx ignores --python when
+  # --force is given, but honours the env var for both fresh and forced installs.
   if [[ -n "$py" ]]; then
-    PIPX_DEFAULT_PYTHON="$py" pipx install spotdl --python "$py" --force && installed=1
+    PIPX_DEFAULT_PYTHON="$py" pipx install spotdl --force && installed=1
   else
     pipx install spotdl --force && installed=1
   fi
