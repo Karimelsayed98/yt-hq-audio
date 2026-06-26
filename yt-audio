@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# yt-audio — download high-quality audio from YouTube (and most other sites).
+# yt-audio — download high-quality audio from YouTube, Spotify, and most sites.
 #
 # Usage:
 #   ./yt-audio [options] <url> [url2 ...]
@@ -12,9 +12,15 @@
 #   -b, --batch FILE   Read URLs from FILE (one per line, # comments allowed)
 #   -h, --help         Show this help
 #
-# Notes:
-#   * "opus" keeps YouTube's best native stream with NO re-encoding (best quality).
-#   * "m4a"  prefers the native AAC stream to avoid double-compression.
+# Sources:
+#   * YouTube / others  → downloaded with yt-dlp (best native audio).
+#   * Spotify links     → routed through spotdl: it reads the track/playlist
+#     metadata from Spotify, then fetches the matching audio from YouTube.
+#     (Spotify's own streams are DRM-protected and cannot be downloaded.)
+#
+# Format notes:
+#   * "opus" keeps the best native stream with NO re-encoding (best quality).
+#   * "m4a"  prefers native AAC to avoid double-compression.
 #   * "mp3"  is a lossy re-encode (universal compatibility).
 #   * "flac"/"wav" are lossless containers — they do NOT add quality beyond the
 #     source, just bigger files. wav is 16-bit/48 kHz PCM.
@@ -26,10 +32,10 @@ OUTDIR="./downloads"
 BATCH=""
 URLS=()
 
-die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 info() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 
-show_help() { sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+show_help() { sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 
 # ---- parse args ------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -43,46 +49,90 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ---- dependency check ------------------------------------------------------
-command -v yt-dlp >/dev/null 2>&1 || die "yt-dlp not found. Run ./install.sh first."
-command -v ffmpeg >/dev/null 2>&1 || die "ffmpeg not found. Run ./install.sh first."
-
 # ---- validate format -------------------------------------------------------
 case "$FORMAT" in
   opus|m4a|mp3|flac|wav) ;;
   *) die "unsupported format: $FORMAT (choose: opus, m4a, mp3, flac, wav)" ;;
 esac
 
-# ---- collect URLs ----------------------------------------------------------
-if [[ -z "$BATCH" && ${#URLS[@]} -eq 0 ]]; then
-  die "no URLs given. Pass links as arguments or use -b links.txt (see --help)."
+# ---- collect all URLs (args + batch file) ----------------------------------
+ALL_URLS=()
+[[ ${#URLS[@]} -gt 0 ]] && ALL_URLS+=("${URLS[@]}")
+
+if [[ -n "$BATCH" ]]; then
+  [[ -f "$BATCH" ]] || die "batch file not found: $BATCH"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"                                   # strip # comments
+    line="${line#"${line%%[![:space:]]*}"}"              # trim leading space
+    line="${line%"${line##*[![:space:]]}"}"              # trim trailing space
+    [[ -n "$line" ]] && ALL_URLS+=("$line")
+  done < "$BATCH"
+fi
+
+[[ ${#ALL_URLS[@]} -eq 0 ]] && die "no URLs given. Pass links as arguments or use -b links.txt (see --help)."
+
+# ---- partition into Spotify vs everything-else -----------------------------
+SPOTIFY=()
+OTHER=()
+for u in "${ALL_URLS[@]}"; do
+  case "$u" in
+    *open.spotify.com*|spotify:*) SPOTIFY+=("$u") ;;
+    *)                            OTHER+=("$u") ;;
+  esac
+done
+
+# ---- dependency checks (only for the sources actually used) ----------------
+command -v ffmpeg >/dev/null 2>&1 || die "ffmpeg not found. Run ./install.sh first."
+if [[ ${#OTHER[@]} -gt 0 ]]; then
+  command -v yt-dlp >/dev/null 2>&1 || die "yt-dlp not found. Run ./install.sh first."
+fi
+if [[ ${#SPOTIFY[@]} -gt 0 ]]; then
+  command -v spotdl >/dev/null 2>&1 || die "spotdl not found (needed for Spotify links). Run ./install.sh first."
 fi
 
 mkdir -p "$OUTDIR"
+info "Format: $FORMAT   Output: $OUTDIR"
 
-# ---- build yt-dlp format selector + postprocessor --------------------------
-# Pick the best source stream for the requested target.
-case "$FORMAT" in
-  m4a) SELECT='bestaudio[ext=m4a]/bestaudio' ;;
-  *)   SELECT='bestaudio/best' ;;
-esac
+# ---- YouTube / other sites via yt-dlp --------------------------------------
+if [[ ${#OTHER[@]} -gt 0 ]]; then
+  info "Downloading ${#OTHER[@]} link(s) with yt-dlp..."
 
-YTDLP_ARGS=(
-  -f "$SELECT"
-  -x --audio-format "$FORMAT" --audio-quality 0
-  --embed-metadata --embed-thumbnail
-  --no-playlist
-  -o "$OUTDIR/%(title)s.%(ext)s"
-)
+  case "$FORMAT" in
+    m4a) SELECT='bestaudio[ext=m4a]/bestaudio' ;;
+    *)   SELECT='bestaudio/best' ;;
+  esac
 
-# 16-bit / 48 kHz PCM for wav
-if [[ "$FORMAT" == "wav" ]]; then
-  YTDLP_ARGS+=(--postprocessor-args "ffmpeg:-ar 48000 -sample_fmt s16")
+  YTDLP_ARGS=(
+    -f "$SELECT"
+    -x --audio-format "$FORMAT" --audio-quality 0
+    --embed-metadata --embed-thumbnail
+    --no-playlist
+    -o "$OUTDIR/%(title)s.%(ext)s"
+  )
+  [[ "$FORMAT" == "wav" ]] && YTDLP_ARGS+=(--postprocessor-args "ffmpeg:-ar 48000 -sample_fmt s16")
+
+  yt-dlp "${YTDLP_ARGS[@]}" "${OTHER[@]}"
 fi
 
-[[ -n "$BATCH" ]] && YTDLP_ARGS+=(-a "$BATCH")
+# ---- Spotify via spotdl (metadata from Spotify, audio from YouTube) --------
+if [[ ${#SPOTIFY[@]} -gt 0 ]]; then
+  info "Downloading ${#SPOTIFY[@]} Spotify link(s) with spotdl..."
 
-info "Format: $FORMAT   Output: $OUTDIR"
-yt-dlp "${YTDLP_ARGS[@]}" "${URLS[@]}"
+  # Two spotdl 4.x quirks we work around:
+  #   1) It silently writes nothing when --output is an ABSOLUTE path, so we cd
+  #      into the output dir and use a RELATIVE output template instead.
+  #   2) Its default YouTube player client currently returns HTTP 403, so we
+  #      force the 'android_vr' client (the one yt-dlp auto-selects and that works).
+  ABS_OUTDIR="$(cd "$OUTDIR" && pwd)"
+
+  SPOTDL_OPTS=(
+    --format "$FORMAT"
+    --output "{artists} - {title}.{output-ext}"
+    --yt-dlp-args "--extractor-args youtube:player_client=android_vr"
+  )
+
+  # spotdl expects: spotdl download <urls...> [options]
+  ( cd "$ABS_OUTDIR" && spotdl download "${SPOTIFY[@]}" "${SPOTDL_OPTS[@]}" )
+fi
 
 info "Done. Files are in: $OUTDIR"
